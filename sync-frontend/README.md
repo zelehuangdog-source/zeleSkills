@@ -42,7 +42,7 @@
 /fork /sync-frontend
 ```
 
-然后切到前端 session，Cmd+V 粘贴即可。
+等 fork agent 执行完毕后，切到前端 session，Cmd+V 粘贴即可。
 
 ## 它做了什么
 

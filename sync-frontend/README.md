@@ -40,14 +40,6 @@
 
 从当前后端对话中自动提取完整 API 契约（URL、Method、Request/Response 结构、枚举、错误码、边界说明），组装为一段可直接驱动前端 session 工作的结构化提示词，保存到 Obsidian 并复制到剪贴板。
 
-## 安装
-
-将 `sync-frontend/` 目录复制到 `~/.claude/skills/` 下：
-
-```bash
-cp -r sync-frontend ~/.claude/skills/
-```
-
 ## 正确用法
 
 在后端 Claude Code session 中，API 设计讨论完毕后：
@@ -84,3 +76,11 @@ cp -r sync-frontend ~/.claude/skills/
 - Claude Code v2.1.32+（需要 `/fork` 命令支持）
 - macOS（使用 `pbcopy` 和 `open`）
 - [clarify](../clarify/) skill（前端"先澄清"模式依赖）
+
+## 安装
+
+将 `sync-frontend/` 目录复制到 `~/.claude/skills/` 下：
+
+```bash
+cp -r sync-frontend ~/.claude/skills/
+```

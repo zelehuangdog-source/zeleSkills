@@ -10,3 +10,4 @@
 | [clarify](./clarify/) | 需求澄清器，动手之前系统性收集需求细节，消除歧义 | 原创 |
 | [ultracode](./ultracode/) | 多智能体编排器，通过多 agent 并行协作完成复杂任务 | 原创 |
 | [branchnew](./branchnew/) | Fork 当前 Claude Code session 到 iTerm 新 split pane | Fork from [limin112/branchnew](https://github.com/limin112/branchnew) |
+| [claude-session-restore](./claude-session-restore/) | 重启电脑前后，存档/恢复 Warp 里所有 Claude Code 会话（含真实分屏布局） | 原创 |

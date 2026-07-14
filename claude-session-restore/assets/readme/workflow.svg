@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="430" viewBox="0 0 1200 430"
+     role="img" aria-labelledby="title desc">
+  <title id="title">工作原理：扫描 → 匹配存档 → 恢复</title>
+  <desc id="desc">存档时靠 WARP_TERMINAL_SESSION_UUID 把每个 Warp pane 精确匹配到一个 Claude session id，写入 manifest 与 tab_config；恢复时打开对应 tab，每个格子自动执行 --resume。</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#46D3A6"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="430" rx="26" fill="#0B0E14"/>
+  <rect x="0.5" y="0.5" width="1199" height="429" rx="25.5" fill="none" stroke="#1B2230"/>
+
+  <text x="64" y="52" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" letter-spacing="3" fill="#46D3A6">HOW IT WORKS</text>
+  <text x="216" y="52" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="17" fill="#7D8590">扫描当前会话  →  按 UUID 精确匹配并存档  →  重启后逐格恢复</text>
+
+  <!-- ===== Stage 1: 扫描存档 ===== -->
+  <g transform="translate(64 90)">
+    <rect x="0" y="0" width="316" height="300" rx="12" fill="#121722" stroke="#242D3C"/>
+    <text x="20" y="34" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#46D3A6">1 · 扫描</text>
+    <text x="20" y="58" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="15" fill="#E6EDF3">遍历正在跑的 claude 进程</text>
+
+    <!-- pane with env var -> session -->
+    <g transform="translate(20 82)">
+      <rect x="0" y="0" width="276" height="58" rx="8" fill="#0E131C" stroke="#232B39"/>
+      <text x="14" y="24" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#9AA4B2">$WARP_TERMINAL_SESSION_UUID</text>
+      <text x="14" y="44" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#46D3A6">a3f1··9c2</text>
+      <text x="150" y="44" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#5A6473">→ session a3f1</text>
+    </g>
+    <g transform="translate(20 150)">
+      <rect x="0" y="0" width="276" height="58" rx="8" fill="#0E131C" stroke="#232B39"/>
+      <text x="14" y="24" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#9AA4B2">$WARP_TERMINAL_SESSION_UUID</text>
+      <text x="14" y="44" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#46D3A6">7b0e··d41</text>
+      <text x="150" y="44" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#5A6473">→ session 7b0e</text>
+    </g>
+    <text x="20" y="248" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="13" fill="#7D8590">没有该环境变量的进程</text>
+    <text x="20" y="270" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="13" fill="#7D8590">（IntelliJ / iTerm …）自动跳过</text>
+  </g>
+
+  <!-- arrow 1 -->
+  <path d="M392 240 H430" stroke="url(#arrow)" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- ===== Stage 2: 匹配 & 存档 (motif) ===== -->
+  <g transform="translate(442 90)">
+    <rect x="0" y="0" width="316" height="300" rx="12" fill="#0F1A17" stroke="#1E5A47"/>
+    <text x="20" y="34" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#46D3A6">2 · 匹配 &amp; 存档</text>
+    <text x="20" y="58" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="15" fill="#E6EDF3">对齐 Warp 状态库的分屏树</text>
+
+    <!-- sqlite pane uuid table -->
+    <g transform="translate(20 82)">
+      <rect x="0" y="0" width="276" height="94" rx="8" fill="#0B140F" stroke="#1E5A47"/>
+      <text x="14" y="24" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#7D8590">warp.sqlite · terminal_panes</text>
+      <line x1="14" y1="34" x2="262" y2="34" stroke="#1E5A47"/>
+      <text x="14" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#CBD5E1">uuid          project</text>
+      <text x="14" y="76" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#46D3A6">a3f1··9c2     settle</text>
+    </g>
+
+    <text x="20" y="204" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="14" fill="#9AA4B2">pane.uuid == 进程环境变量 → 精确匹配</text>
+
+    <!-- output artifacts -->
+    <g transform="translate(20 220)">
+      <rect x="0" y="0" width="130" height="52" rx="7" fill="#0B140F" stroke="#1E5A47"/>
+      <text x="14" y="22" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#7D8590">manifest.txt</text>
+      <text x="14" y="40" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#46D3A6">最新一份</text>
+    </g>
+    <g transform="translate(162 220)">
+      <rect x="0" y="0" width="134" height="52" rx="7" fill="#0B140F" stroke="#1E5A47"/>
+      <text x="14" y="22" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#7D8590">tab_configs/*.toml</text>
+      <text x="14" y="40" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#46D3A6">复刻分屏树</text>
+    </g>
+  </g>
+
+  <!-- arrow 2 -->
+  <path d="M770 240 H808" stroke="url(#arrow)" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- ===== Stage 3: 恢复 ===== -->
+  <g transform="translate(820 90)">
+    <rect x="0" y="0" width="316" height="300" rx="12" fill="#121722" stroke="#242D3C"/>
+    <text x="20" y="34" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#46D3A6">3 · 恢复</text>
+    <text x="20" y="58" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="15" fill="#E6EDF3">重启后逐格接回上下文</text>
+
+    <g transform="translate(20 82)">
+      <rect x="0" y="0" width="276" height="46" rx="8" fill="#0E131C" stroke="#232B39"/>
+      <text x="14" y="28" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#CBD5E1">open "warp://tab_config/…"</text>
+    </g>
+
+    <!-- restored panes -->
+    <g transform="translate(20 142)">
+      <rect x="0" y="0" width="276" height="42" rx="8" fill="#0C1A16" stroke="#1E5A47"/>
+      <path d="M14 21 l4 4 l7 -8" fill="none" stroke="#46D3A6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="34" y="26" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#46D3A6">--resume a3f1··9c2</text>
+    </g>
+    <g transform="translate(20 194)">
+      <rect x="0" y="0" width="276" height="42" rx="8" fill="#0C1A16" stroke="#1E5A47"/>
+      <path d="M14 21 l4 4 l7 -8" fill="none" stroke="#46D3A6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="34" y="26" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#46D3A6">--resume 7b0e··d41</text>
+    </g>
+    <text x="20" y="270" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-size="13" fill="#7D8590">分屏布局 &amp; 每格会话 一并复原</text>
+  </g>
+</svg>

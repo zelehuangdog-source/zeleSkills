@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120" viewBox="0 0 1200 120" role="img" aria-labelledby="t d">
+  <title id="t">安装</title>
+  <desc id="d">安装 章节标题</desc>
+  <rect width="1200" height="120" rx="20" fill="#0B0E14"/>
+  <rect x="0.5" y="0.5" width="1199" height="119" rx="19.5" fill="none" stroke="#1B2230"/>
+  <rect x="40" y="46" width="8" height="28" rx="3" fill="#46D3A6"/>
+  <text x="66" y="56" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="14" letter-spacing="2" fill="#46D3A6">INSTALL</text>
+  <text x="66" y="86" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif" font-size="30" font-weight="700" fill="#E6EDF3">安装</text>
+  <g transform="translate(1060 42)" opacity="0.9">
+    <rect x="0" y="0" width="16" height="16" rx="3" fill="#121722" stroke="#232B39"/>
+    <rect x="24" y="0" width="16" height="36" rx="3" fill="#0C1A16" stroke="#1E5A47"/>
+    <rect x="48" y="0" width="16" height="16" rx="3" fill="#121722" stroke="#232B39"/>
+    <rect x="24" y="0" width="16" height="16" rx="3" fill="#0C1A16" stroke="#1E5A47"/>
+  </g>
+</svg>

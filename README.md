@@ -7,7 +7,15 @@
 | Skill | 说明 | 来源 |
 |-------|------|------|
 | [sync-frontend](./sync-frontend/) | 后端 API 设计完成后，一键生成结构化提示词同步给前端 session | 原创 |
-| [clarify](./clarify/) | 需求澄清器，动手之前系统性收集需求细节，消除歧义 | 原创 |
-| [ultracode](./ultracode/) | 多智能体编排器，通过多 agent 并行协作完成复杂任务 | 原创 |
-| [branchnew](./branchnew/) | Fork 当前 Claude Code session 到 iTerm 新 split pane | Fork from [limin112/branchnew](https://github.com/limin112/branchnew) |
 | [claude-session-restore](./claude-session-restore/) | 重启电脑前后，存档/恢复 Warp 里所有 Claude Code 会话（含真实分屏布局） | 原创 |
+| [zele-code-review](./zele-code-review/) | 严格对照个人全局代码规范审查当前改动，后台跑 review 不阻塞，完成后逐条确认、可当场修复 | 原创 |
+
+## 安装
+
+每个 skill 是一个文件夹，拷到本地 skills 目录即可：
+
+```bash
+cp -r <skill> ~/.claude/skills/
+```
+
+> Commands（`/clarify`、`/ultracode`、`/branchnew`）已迁移到独立仓库 [zeleCommands](https://github.com/zelehuangdog-source/zeleCommands)。

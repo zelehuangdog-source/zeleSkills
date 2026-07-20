@@ -17,8 +17,10 @@ visibility: private
 
 - 存档脚本：`~/.claude/skills/claude-session-restore/claude-session-snapshot.py`
 - 恢复脚本：`~/.claude/skills/claude-session-restore/claude-restore-sessions.sh`
-- manifest（存档产物，恢复时读取）：`~/.claude/skills/claude-session-restore/claude-restore-manifest.txt`
-- 存档时间戳：`~/.claude/skills/claude-session-restore/claude-restore-manifest.meta`
+- 存档目录（每份存档一个子目录，恢复时读取）：`~/.claude/skills/claude-session-restore/snapshots/<snapshot-id>/`
+  - `manifest.txt`：这份存档要打开的 Warp tab-config 名称列表
+  - `meta.txt`：第 1 行存档时间、第 2 行会话数、第 3 行 tab 数
+- 保留策略：最多保留最近 10 份存档，更旧的连同其 tab-config 自动删除
 
 ## 执行流程
 
@@ -41,17 +43,31 @@ visibility: private
 ~/.claude/skills/claude-session-restore/claude-session-snapshot.py
 ```
 
-把输出的汇总（记录了几个会话、生成了几个 tab-config）原样展示给用户。**存档永远只保留最新一份**——每次运行都会先清空上一次生成的 `claude-restore-*.toml`，重新生成，不存在"多份存档选哪个"的问题，恢复时用的永远是最后一次存档。
+把输出的汇总（记录了几个会话、生成了几个 tab-config、这份存档的 ID）原样展示给用户。**每次存档都是独立的一份历史**——带唯一的 snapshot-id（时间戳），最多保留最近 10 份，恢复时可以在这些历史存档里挑，不再是只能恢复最新的那一份。
 
-### 2b. 如果选恢复
+### 2b. 如果选恢复（先列出、让用户选、再恢复）
 
-直接运行：
+分三步，不要直接闷头恢复最新的：
+
+**第一步：列出所有存档**
 
 ```bash
-bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh
+bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh --list
 ```
 
-运行前脚本会先打印这份存档的时间戳，帮用户判断是不是最新鲜的那一份。把恢复过程的输出展示给用户。
+输出每行是一份存档：`snapshot-id ⭾ 存档时间 ⭾ N 个会话 ⭾ M 个 tab`，最新的在最上面。
+
+**第二步：用 AskUserQuestion 让用户选要恢复哪一份**
+
+把最新的几份（AskUserQuestion 最多 4 个选项）作为候选，label 用「存档时间 + 会话数」，description 补上 snapshot-id。如果存档份数超过 4，告诉用户可以在「Other」里手输某个更早的 snapshot-id。
+
+**第三步：用选中的 snapshot-id 恢复**
+
+```bash
+bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh <用户选中的 snapshot-id>
+```
+
+（用户如果明确说"就恢复最新的"，可以直接用 `latest` 代替 snapshot-id，跳过一二步。）把恢复过程的输出展示给用户。
 
 ## 原理（如果要排查问题，看这里）
 
@@ -65,3 +81,4 @@ bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh
 
 - 无法 100% 保证和原始布局分毫不差（Warp 自己的状态库写入有轻微延迟，极少数刚创建的 pane 可能还没同步进去）——这种情况下该会话会被单独恢复成一个不分屏的 tab，不会丢失，只是布局上退化。
 - 只能恢复归属 Warp 窗口的会话，其他终端里跑的 claude 不在这套工具的管理范围内。
+- pane 尺寸恢复不了、只能均分（Warp 的 tab-config 格式没有尺寸字段，硬限制）。

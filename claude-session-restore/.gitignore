@@ -1,2 +1,5 @@
+# 运行时会话存档（含真实 session id），不纳入版本控制
+snapshots/
+# 旧版单份 manifest（已废弃，保留忽略以防遗留）
 claude-restore-manifest.txt
 claude-restore-manifest.meta

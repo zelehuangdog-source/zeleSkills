@@ -7,6 +7,8 @@
 """
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -20,8 +22,15 @@ HOME = Path.home()
 SKILL_DIR = Path(__file__).resolve().parent
 SESSIONS_DIR = HOME / ".claude" / "sessions"
 TAB_CONFIG_DIR = HOME / ".warp" / "tab_configs"
-MANIFEST = SKILL_DIR / "claude-restore-manifest.txt"
-MANIFEST_META = SKILL_DIR / "claude-restore-manifest.meta"
+# 每份存档独立存到 snapshots/<sid>/ 下（manifest.txt + meta.txt），保留最近 KEEP_SNAPSHOTS 份，
+# 恢复时可以在多份历史存档里挑，不再是只能恢复最新的那一份。
+SNAPSHOTS_DIR = SKILL_DIR / "snapshots"
+KEEP_SNAPSHOTS = 10
+# 新版 tab-config 命名：claude-restore-<sid>-<n>，sid 是纯数字时间戳；用它反查某份存档的所有 config。
+NAME_RE = re.compile(r"^claude-restore-(\d+)-\d+$")
+# 旧版单份 manifest，仅用于清理遗留文件。
+LEGACY_MANIFEST = SKILL_DIR / "claude-restore-manifest.txt"
+LEGACY_MANIFEST_META = SKILL_DIR / "claude-restore-manifest.meta"
 WARP_DB = (
     HOME
     / "Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support"
@@ -247,10 +256,38 @@ def write_tab_config(name, chunks):
     (TAB_CONFIG_DIR / f"{name}.toml").write_text("\n".join(lines))
 
 
+def prune_snapshots():
+    """只保留最近 KEEP_SNAPSHOTS 份存档目录，删掉更旧的，返回仍然有效的 sid 集合。"""
+    if not SNAPSHOTS_DIR.is_dir():
+        return set()
+    snaps = sorted(
+        (d for d in SNAPSHOTS_DIR.iterdir() if d.is_dir() and d.name.isdigit()),
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    for d in snaps[KEEP_SNAPSHOTS:]:
+        shutil.rmtree(d, ignore_errors=True)
+    return {d.name for d in snaps[:KEEP_SNAPSHOTS]}
+
+
+def sync_tab_configs(valid_sids):
+    """删除不属于任何有效存档的 tab-config（含旧版无 sid 命名的遗留文件），避免无限堆积。"""
+    for f in TAB_CONFIG_DIR.glob("claude-restore-*.toml"):
+        m = NAME_RE.match(f.stem)
+        if not m or m.group(1) not in valid_sids:
+            f.unlink()
+
+
 def main():
     TAB_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    for f in TAB_CONFIG_DIR.glob("claude-restore-*.toml"):
-        f.unlink()
+    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    # 清理旧版单份 manifest，新版改用 snapshots/<sid>/ 存档目录。
+    for legacy in (LEGACY_MANIFEST, LEGACY_MANIFEST_META):
+        if legacy.exists():
+            legacy.unlink()
+
+    now = datetime.now()
+    sid = now.strftime("%Y%m%d%H%M%S")
 
     print("扫描存活的 Claude Code 会话...")
     live_sessions = collect_live_sessions()
@@ -268,7 +305,7 @@ def main():
         if not chunks:
             continue
         counter += 1
-        name = f"claude-restore-{counter}"
+        name = f"claude-restore-{sid}-{counter}"
         write_tab_config(name, chunks)
         manifest_names.append(name)
         leaf_count = sum(1 for c in chunks if any(l.startswith("directory =") for l in c))
@@ -282,7 +319,7 @@ def main():
 
     for s in leftover:
         counter += 1
-        name = f"claude-restore-{counter}"
+        name = f"claude-restore-{sid}-{counter}"
         chunk = [
             "[[panes]]",
             'id = "main"',
@@ -295,15 +332,29 @@ def main():
         print(f"  [{name}] {s['cwd']}（session {s['session_id']}，DB 里没找到对应 pane，单独开一个 tab）")
         matched_count += 1
 
-    MANIFEST.write_text("\n".join(manifest_names) + ("\n" if manifest_names else ""))
-    MANIFEST_META.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
     print("")
     if not manifest_names:
+        # 这次没扫到会话，不落存档，也顺手同步一下 tab-config（保留已有历史存档）。
+        sync_tab_configs(prune_snapshots())
         print("没有找到可恢复的会话")
-    else:
-        print(f"共记录 {matched_count} 个会话，生成 {len(manifest_names)} 个 tab-config，manifest: {MANIFEST}")
-        print("重启后运行 claude-restore-sessions.sh 即可恢复")
+        return
+
+    # 1. 把本次存档的清单和元信息写到独立的 snapshots/<sid>/ 目录
+    snap_dir = SNAPSHOTS_DIR / sid
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "manifest.txt").write_text("\n".join(manifest_names) + "\n")
+    (snap_dir / "meta.txt").write_text(
+        f"{now:%Y-%m-%d %H:%M:%S}\n{matched_count}\n{len(manifest_names)}\n"
+    )
+
+    # 2. 只保留最近 KEEP_SNAPSHOTS 份存档，并清掉不属于有效存档的 tab-config
+    valid_sids = prune_snapshots()
+    valid_sids.add(sid)
+    sync_tab_configs(valid_sids)
+
+    print(f"共记录 {matched_count} 个会话，生成 {len(manifest_names)} 个 tab-config")
+    print(f"存档 ID：{sid}（{now:%Y-%m-%d %H:%M:%S}），已保留最近 {len(valid_sids)} 份存档")
+    print("重启后运行 claude-restore-sessions.sh --list 查看并选择要恢复的存档")
 
 
 if __name__ == "__main__":

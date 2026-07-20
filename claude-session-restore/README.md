@@ -17,8 +17,8 @@ Warp 自己会把窗口、tab、分屏结构原样摆回来，但每个格子里
 
 触发这个 skill 后，会先问你这次是**存档**还是**恢复**：
 
-- **重启前** → 选存档，自动扫描当前 Warp 里所有 Claude Code 会话和分屏布局，生成一份存档（只保留最新一份，不用管理多份）。
-- **重启后** → 选恢复，读取上一次的存档，自动打开对应的 Warp tab，按原来的分屏结构逐格恢复，每个格子里自动 `--resume` 接回对应 session。
+- **重启前** → 选存档，自动扫描当前 Warp 里所有 Claude Code 会话和分屏布局，生成一份带唯一 ID（时间戳）的历史存档，最多保留最近 10 份。
+- **重启后** → 选恢复，先列出所有历史存档（时间 / 会话数 / tab 数），你挑一份，自动打开对应的 Warp tab，按原来的分屏结构逐格恢复，每个格子里自动 `--resume` 接回对应 session。
 
 也可以跳过 skill 直接手动执行两个脚本：
 
@@ -26,8 +26,10 @@ Warp 自己会把窗口、tab、分屏结构原样摆回来，但每个格子里
 # 存档
 ~/.claude/skills/claude-session-restore/claude-session-snapshot.py
 
-# 恢复
-bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh
+# 恢复：先列出所有存档
+bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh --list
+# 再恢复指定的一份（latest 表示最新一份）
+bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh <snapshot-id>
 ```
 
 <p align="center">
@@ -58,6 +60,7 @@ bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh
 
 - **不保证 100% 分毫不差**：Warp 自己的状态库写入有轻微延迟，极少数刚创建的 pane 可能还没同步进去——这种会话会退化成单独恢复一个不分屏的 tab（不会丢失，只是布局退化）。
 - **只管 Warp 窗口里的会话**：跑在其他终端里的 claude 不在这套工具的管理范围内。
+- **pane 尺寸恢复不了、只能均分**：Warp 的 tab-config 格式没有尺寸字段（源码里 `TabConfigPaneNode` 带 `deny_unknown_fields`，硬塞会解析失败），属 Warp 硬限制。切分方向、层级、数量、内容都能精确还原，唯独尺寸比例会被重置成等分。
 - **恢复命令写死在脚本里的 `RESUME_CMD`**（默认 `mc --code --dangerously-skip-permissions --resume {session_id}`），如果你的启动命令不是 `mc` 别名、或者不想带 `--dangerously-skip-permissions`，改一下脚本里这个常量即可。
 
 ## 依赖

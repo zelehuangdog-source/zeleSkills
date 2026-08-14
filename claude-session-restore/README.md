@@ -61,7 +61,7 @@ bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh <snapsho
 - **不保证 100% 分毫不差**：Warp 自己的状态库写入有轻微延迟，极少数刚创建的 pane 可能还没同步进去——这种会话会退化成单独恢复一个不分屏的 tab（不会丢失，只是布局退化）。
 - **只管 Warp 窗口里的会话**：跑在其他终端里的 claude 不在这套工具的管理范围内。
 - **pane 尺寸恢复不了、只能均分**：Warp 的 tab-config 格式没有尺寸字段（源码里 `TabConfigPaneNode` 带 `deny_unknown_fields`，硬塞会解析失败），属 Warp 硬限制。切分方向、层级、数量、内容都能精确还原，唯独尺寸比例会被重置成等分。
-- **恢复命令写死在脚本里的 `RESUME_CMD`**（默认 `mc --code --dangerously-skip-permissions --resume {session_id}`），如果你的启动命令不是 `mc` 别名、或者不想带 `--dangerously-skip-permissions`，改一下脚本里这个常量即可。
+- **启动命令在恢复时二选一**：`claude-restore-sessions.sh <snapshot-id|latest> [mc|claude]`，第二个参数默认 `mc`（用 `mc --code --dangerously-skip-permissions --resume {session_id}` 拉起），传 `claude` 则改用裸 `claude --dangerously-skip-permissions --resume {session_id}`。恢复前脚本会把 tab-config 里的 resume 命令前缀改写成对应启动方式，session_id 不变，同一份存档可以随意切换。存档脚本里的 `RESUME_CMD` 常量只决定初始前缀，不再是唯一选择。
 
 ## 依赖
 

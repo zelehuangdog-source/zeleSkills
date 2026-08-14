@@ -57,14 +57,21 @@ bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh --list
 
 输出每行是一份存档：`snapshot-id ⭾ 存档时间 ⭾ N 个会话 ⭾ M 个 tab`，最新的在最上面。
 
-**第二步：用 AskUserQuestion 让用户选要恢复哪一份**
+**第二步：用 AskUserQuestion 让用户选要恢复哪一份 + 用哪个启动命令**
 
 把最新的几份（AskUserQuestion 最多 4 个选项）作为候选，label 用「存档时间 + 会话数」，description 补上 snapshot-id。如果存档份数超过 4，告诉用户可以在「Other」里手输某个更早的 snapshot-id。
 
-**第三步：用选中的 snapshot-id 恢复**
+**同一个 AskUserQuestion 里再加一个问题问启动命令**，二选一：
+
+- `mc --code 启动`（默认）：恢复后用 `mc --code --dangerously-skip-permissions --resume <session_id>` 拉起会话
+- `claude 命令启动`：恢复后用 `claude --dangerously-skip-permissions --resume <session_id>` 拉起会话
+
+（用户在对话里已经明确说了用哪个启动命令时，可以不再问这一题。）
+
+**第三步：用选中的 snapshot-id + 启动命令恢复**
 
 ```bash
-bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh <用户选中的 snapshot-id>
+bash ~/.claude/skills/claude-session-restore/claude-restore-sessions.sh <用户选中的 snapshot-id> <mc|claude>
 ```
 
 （用户如果明确说"就恢复最新的"，可以直接用 `latest` 代替 snapshot-id，跳过一二步。）把恢复过程的输出展示给用户。

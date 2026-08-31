@@ -10,6 +10,7 @@
 | [claude-session-restore](./claude-session-restore/) | 重启电脑前后，存档/恢复 Warp 里所有 Claude Code 会话（含真实分屏布局） | 原创 |
 | [zele-code-review](./zele-code-review/) | 严格对照个人全局代码规范审查当前改动，后台跑 review 不阻塞，完成后逐条确认、可当场修复 | 原创 |
 | [test-backend-full](./test-backend-full/) | 写完后端并本地部署后测本次改动：运行时选测试强度（轻/中/重），调本地服务接口走真实链路，缺数据就 INSERT 造数（加标记不删） | 原创 |
+| [translate-article](./translate-article/) | 翻译外文文章到中文，自动添加摘要，本地化图片后存入 Obsidian 对应分类，并同步创建学城文档（含图片上传） | 原创 |
 
 ## 安装
 

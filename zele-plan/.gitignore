@@ -1,0 +1,2 @@
+# plantuml.jar 有 21MB，不入库；build-html.py 首次运行会自动下载
+assets/*.jar

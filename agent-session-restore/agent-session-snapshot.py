@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""重启前手动运行：把当前 Warp 里所有 claude 会话（含真实分屏结构、精确到具体格子）
-记录下来，生成 Warp Tab Config，重启后配合 claude-restore-sessions.sh 恢复。
+"""重启前手动运行：把当前 Warp 里所有 agent 会话（Claude Code + Grok，含真实分屏结构、
+精确到具体格子）记录下来，生成 Warp Tab Config，重启后配合 agent-restore-sessions.sh 恢复。
 
 精确定位靠的是：每个 Warp pane 里的进程环境变量都有 WARP_TERMINAL_SESSION_UUID，
 跟 Warp 自己 sqlite 状态库里 terminal_panes.uuid 是完全一样的值——不用再靠 cwd 瞎猜顺序。
+
+两个 agent 的会话索引来源不同：
+  - Claude Code：~/.claude/sessions/<pid>.json，一个进程一个文件，内含 sessionId/cwd/startedAt。
+  - Grok：~/.grok/active_sessions.json，一张存活登记表（session_id/pid/cwd/opened_at）。
+    grok 进程自身的环境变量里没有 GROK_SESSION_ID（它只注入给子进程），所以 pid → session_id
+    只能靠这张表。
 """
 import json
 import os
@@ -21,22 +27,27 @@ import psutil
 HOME = Path.home()
 SKILL_DIR = Path(__file__).resolve().parent
 SESSIONS_DIR = HOME / ".claude" / "sessions"
+GROK_ACTIVE_SESSIONS = HOME / ".grok" / "active_sessions.json"
 TAB_CONFIG_DIR = HOME / ".warp" / "tab_configs"
 # 每份存档独立存到 snapshots/<sid>/ 下（manifest.txt + meta.txt），保留最近 KEEP_SNAPSHOTS 份，
 # 恢复时可以在多份历史存档里挑，不再是只能恢复最新的那一份。
 SNAPSHOTS_DIR = SKILL_DIR / "snapshots"
 KEEP_SNAPSHOTS = 10
-# 新版 tab-config 命名：claude-restore-<sid>-<n>，sid 是纯数字时间戳；用它反查某份存档的所有 config。
-NAME_RE = re.compile(r"^claude-restore-(\d+)-\d+$")
+# 新版 tab-config 命名：agent-restore-<sid>-<n>，sid 是纯数字时间戳；用它反查某份存档的所有 config。
+NAME_RE = re.compile(r"^agent-restore-(\d+)-\d+$")
 # 旧版单份 manifest，仅用于清理遗留文件。
-LEGACY_MANIFEST = SKILL_DIR / "claude-restore-manifest.txt"
-LEGACY_MANIFEST_META = SKILL_DIR / "claude-restore-manifest.meta"
+LEGACY_MANIFEST = SKILL_DIR / "agent-restore-manifest.txt"
+LEGACY_MANIFEST_META = SKILL_DIR / "agent-restore-manifest.meta"
 WARP_DB = (
     HOME
     / "Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support"
     / "dev.warp.Warp-Stable/warp.sqlite"
 )
-RESUME_CMD = "mc --code --dangerously-skip-permissions --resume {session_id}"
+# 恢复命令按 agent 分派。grok 用 --always-approve，与 claude 侧的 --dangerously-skip-permissions 对齐。
+RESUME_CMD = {
+    "claude": "mc --code --dangerously-skip-permissions --resume {session_id}",
+    "grok": "grok --always-approve --resume {session_id}",
+}
 
 
 def sh(*args):
@@ -77,8 +88,34 @@ def toml_escape(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def collect_live_sessions():
-    """扫描 ~/.claude/sessions/*.json，只保留：进程存活 + 挂真实 tty + 归属 Warp 的会话。"""
+def pane_session(agent, pid, session_id, cwd, started):
+    """把一条原始记录归一成统一形态；只保留"进程存活 + 挂真实 tty + 归属 Warp"的会话。"""
+    if not is_alive(pid):
+        return None
+    tty = get_tty(pid)
+    if not tty or tty == "??":
+        return None
+    pane_uuid = get_warp_pane_uuid(pid)
+    if not pane_uuid:
+        print(f"  跳过 pid={pid}（{agent}）：不是 Warp 里的会话（可能在 IntelliJ/iTerm/远程终端等其他地方）", file=sys.stderr)
+        return None
+    if not session_id or not cwd:
+        return None
+    return {
+        "agent": agent,
+        "pid": pid,
+        "session_id": session_id,
+        "cwd": cwd,
+        "tty": tty,
+        "pane_uuid": pane_uuid,
+        "stopped": is_stopped(pid),
+        "started": started,
+    }
+
+
+def collect_claude_sessions():
+    """扫描 ~/.claude/sessions/<pid>.json。这张登记表只记 claude 本体、不记 mc 启动壳，
+    所以同一个 `mc --code` 格子天然只算一个会话，不会重复计数。"""
     sessions = []
     if not SESSIONS_DIR.is_dir():
         return sessions
@@ -87,32 +124,47 @@ def collect_live_sessions():
             pid = int(f.stem)
         except ValueError:
             continue
-        if not is_alive(pid):
-            continue
-        tty = get_tty(pid)
-        if not tty or tty == "??":
-            continue
-        pane_uuid = get_warp_pane_uuid(pid)
-        if not pane_uuid:
-            print(f"  跳过 pid={pid}：不是 Warp 里的会话（可能在 IntelliJ/iTerm/远程终端等其他地方）", file=sys.stderr)
-            continue
         try:
             data = json.loads(f.read_text())
         except Exception:
             continue
-        session_id = data.get("sessionId")
-        cwd = data.get("cwd")
-        if not session_id or not cwd:
-            continue
-        sessions.append({
-            "pid": pid,
-            "session_id": session_id,
-            "cwd": cwd,
-            "tty": tty,
-            "pane_uuid": pane_uuid,
-            "stopped": is_stopped(pid),
-        })
+        s = pane_session(
+            "claude",
+            pid,
+            data.get("sessionId"),
+            data.get("cwd"),
+            (data.get("startedAt") or 0) / 1000.0,
+        )
+        if s:
+            sessions.append(s)
     return sessions
+
+
+def collect_grok_sessions():
+    """读 ~/.grok/active_sessions.json：grok 进程自身的环境变量里没有 GROK_SESSION_ID
+    （只注入给子进程），pid → session_id 只能靠这张登记表；进程退出后条目会被移除。"""
+    sessions = []
+    if not GROK_ACTIVE_SESSIONS.is_file():
+        return sessions
+    try:
+        entries = json.loads(GROK_ACTIVE_SESSIONS.read_text())
+    except Exception:
+        return sessions
+    for e in entries:
+        started = 0.0
+        try:
+            started = datetime.fromisoformat(str(e["opened_at"]).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+        s = pane_session("grok", int(e["pid"]), e.get("session_id"), e.get("cwd"), started)
+        if s:
+            sessions.append(s)
+    return sessions
+
+
+def collect_live_sessions():
+    """收集所有存活的 agent 会话（claude + grok 混合）。"""
+    return collect_claude_sessions() + collect_grok_sessions()
 
 
 def load_warp_pane_tree():
@@ -155,34 +207,44 @@ def load_warp_pane_tree():
     return tabs
 
 
+def rank_sessions(sessions):
+    """同一格子里多个会话的排序：没被 Ctrl-Z 挂起的优先，其次启动更晚的（更可能是你重启前正在用的）。"""
+    return sorted(sessions, key=lambda s: (s["stopped"], -s["started"]))
+
+
 def match_sessions_to_tree(tabs, live_sessions):
     """按 WARP_TERMINAL_SESSION_UUID 精确匹配到树里的叶子——不是猜的，是精确对应。
     DB 还没同步到的（刚开的新 pane）匹配不上，留作 leftover 单独处理。
-    同一个 pane_uuid 对应多个存活会话时（比如 Ctrl-Z 挂起了一个旧的又在同一个格子里另起了新的），
-    只保留没被挂起的那个，被挂起的直接丢弃（恢复一个已经不在前台的任务没有意义）。"""
-    by_uuid = {}
+
+    一个格子里有多个"真正独立"的会话时（先 Ctrl-Z 挂了 A 又开了 B、或在 grok 里嵌套起了 claude），
+    一个格子只有一个终端画面、塞不下两个：排序后第一个回原格子，其余作为 extra 另开 tab，
+    会话内容都不丢。注意 `mc --code` 的 mc+claude 是两个进程但只有一个会话，不在此列。"""
+    by_uuid = defaultdict(list)
     for s in live_sessions:
-        existing = by_uuid.get(s["pane_uuid"])
-        if existing is None:
-            by_uuid[s["pane_uuid"]] = s
-        elif existing["stopped"] and not s["stopped"]:
-            print(f"  pid={existing['pid']} 和 pid={s['pid']} 是同一个 pane，丢弃被挂起的 pid={existing['pid']}", file=sys.stderr)
-            by_uuid[s["pane_uuid"]] = s
-        elif s["stopped"] and not existing["stopped"]:
-            print(f"  pid={existing['pid']} 和 pid={s['pid']} 是同一个 pane，丢弃被挂起的 pid={s['pid']}", file=sys.stderr)
-    matched_uuids = set()
+        by_uuid[s["pane_uuid"]].append(s)
 
     assignment = {}
+    extras = []
+    matched_uuids = set()
     for tab_id, tab in tabs.items():
         for node_id, n in tab["nodes"].items():
-            if n["is_leaf"] and n["cwd"]:
-                session = by_uuid.get(n["pane_uuid"])
-                assignment[(tab_id, node_id)] = session
-                if session:
-                    matched_uuids.add(n["pane_uuid"])
+            if not (n["is_leaf"] and n["cwd"]):
+                continue
+            group = rank_sessions(by_uuid.get(n["pane_uuid"], []))
+            assignment[(tab_id, node_id)] = group[0] if group else None
+            if group:
+                matched_uuids.add(n["pane_uuid"])
+                if len(group) > 1:
+                    keep, rest = group[0], group[1:]
+                    extras.extend(rest)
+                    print(
+                        f"  格子 {n['pane_uuid'][:8]} 里有 {len(group)} 个独立会话，"
+                        f"保留 {keep['agent']}/{keep['session_id'][:8]}，另外 {len(rest)} 个各开一个 tab",
+                        file=sys.stderr,
+                    )
 
     leftover = [s for s in live_sessions if s["pane_uuid"] not in matched_uuids]
-    return assignment, leftover
+    return assignment, extras, leftover
 
 
 def render_tab_chunks(tab_id, tab, assignment):
@@ -211,7 +273,7 @@ def render_tab_chunks(tab_id, tab, assignment):
                 f'directory = "{toml_escape(cwd)}"',
             ]
             if session:
-                cmd = RESUME_CMD.format(session_id=session["session_id"])
+                cmd = RESUME_CMD[session["agent"]].format(session_id=session["session_id"])
                 block.append(f'commands = ["{toml_escape(cmd)}"]')
             chunks.append(block)
             return pane_id
@@ -272,10 +334,21 @@ def prune_snapshots():
 
 def sync_tab_configs(valid_sids):
     """删除不属于任何有效存档的 tab-config（含旧版无 sid 命名的遗留文件），避免无限堆积。"""
-    for f in TAB_CONFIG_DIR.glob("claude-restore-*.toml"):
+    for f in TAB_CONFIG_DIR.glob("agent-restore-*.toml"):
         m = NAME_RE.match(f.stem)
         if not m or m.group(1) not in valid_sids:
             f.unlink()
+
+
+def single_pane_config(session):
+    """把一个接不进分屏树的会话渲染成"单个 pane 的 tab"。"""
+    return [
+        "[[panes]]",
+        'id = "main"',
+        'type = "terminal"',
+        f'directory = "{toml_escape(session["cwd"])}"',
+        f'commands = ["{toml_escape(RESUME_CMD[session["agent"]].format(session_id=session["session_id"]))}"]',
+    ]
 
 
 def main():
@@ -289,12 +362,12 @@ def main():
     now = datetime.now()
     sid = now.strftime("%Y%m%d%H%M%S")
 
-    print("扫描存活的 Claude Code 会话...")
+    print("扫描存活的 agent 会话（Claude Code + Grok）...")
     live_sessions = collect_live_sessions()
 
     print("读取 Warp 真实分屏布局...")
     tabs = load_warp_pane_tree()
-    assignment, leftover = match_sessions_to_tree(tabs, live_sessions)
+    assignment, extras, leftover = match_sessions_to_tree(tabs, live_sessions)
 
     manifest_names = []
     counter = 0
@@ -305,7 +378,7 @@ def main():
         if not chunks:
             continue
         counter += 1
-        name = f"claude-restore-{sid}-{counter}"
+        name = f"agent-restore-{sid}-{counter}"
         write_tab_config(name, chunks)
         manifest_names.append(name)
         leaf_count = sum(1 for c in chunks if any(l.startswith("directory =") for l in c))
@@ -317,19 +390,21 @@ def main():
         matched_count += hit_count
         print(f"  [{name}] 精确还原 {leaf_count} 个 pane 的分屏布局（{hit_count} 个接上了会话）")
 
+    # 同一个格子里多出来的独立会话：一个格子只有一个终端画面，塞不下两个，各自开一个 tab。
+    for s in extras:
+        counter += 1
+        name = f"agent-restore-{sid}-{counter}"
+        write_tab_config(name, [single_pane_config(s)])
+        manifest_names.append(name)
+        print(f"  [{name}] {s['cwd']}（{s['agent']} session {s['session_id']}，与同格子里的另一个会话并存，单独开一个 tab）")
+        matched_count += 1
+
     for s in leftover:
         counter += 1
-        name = f"claude-restore-{sid}-{counter}"
-        chunk = [
-            "[[panes]]",
-            'id = "main"',
-            'type = "terminal"',
-            f'directory = "{toml_escape(s["cwd"])}"',
-            f'commands = ["{toml_escape(RESUME_CMD.format(session_id=s["session_id"]))}"]',
-        ]
-        write_tab_config(name, [chunk])
+        name = f"agent-restore-{sid}-{counter}"
+        write_tab_config(name, [single_pane_config(s)])
         manifest_names.append(name)
-        print(f"  [{name}] {s['cwd']}（session {s['session_id']}，DB 里没找到对应 pane，单独开一个 tab）")
+        print(f"  [{name}] {s['cwd']}（{s['agent']} session {s['session_id']}，DB 里没找到对应 pane，单独开一个 tab）")
         matched_count += 1
 
     print("")
@@ -354,7 +429,7 @@ def main():
 
     print(f"共记录 {matched_count} 个会话，生成 {len(manifest_names)} 个 tab-config")
     print(f"存档 ID：{sid}（{now:%Y-%m-%d %H:%M:%S}），已保留最近 {len(valid_sids)} 份存档")
-    print("重启后运行 claude-restore-sessions.sh --list 查看并选择要恢复的存档")
+    print("重启后运行 agent-restore-sessions.sh --list 查看并选择要恢复的存档")
 
 
 if __name__ == "__main__":

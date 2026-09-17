@@ -1,6 +1,7 @@
 #!/bin/bash
 # 重启后手动运行：从 agent-session-snapshot.py 生成的多份存档里挑一份恢复。
 #   agent-restore-sessions.sh --list                      列出所有存档（最新在前）
+#   agent-restore-sessions.sh --agents <snapshot-id>      只报该存档里 claude / grok 各多少个 pane
 #   agent-restore-sessions.sh <snapshot-id> [启动命令]    恢复指定存档
 #   agent-restore-sessions.sh latest [启动命令]           恢复最新一份存档
 # 启动命令二选一：mc（默认，用 mc --code 启动）/ claude（用 claude 命令启动）。
@@ -77,17 +78,34 @@ snapshot_ids() {
   done
 }
 
+# 统计一份存档里各 agent 的 pane 数：claude 的 resume 命令只有 mc/claude 两种前缀，
+# grok 的固定是 grok。恢复前拿它判断要不要问「claude 用哪个启动命令」。
+snapshot_agents() {
+  local manifest="$SNAPSHOTS_DIR/$1/manifest.txt" name file c=0 g=0
+  [ -s "$manifest" ] || return 1
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    file="$TAB_CONFIG_DIR/$name.toml"
+    [ -f "$file" ] || continue
+    c=$((c + $(grep -cE '^commands = \["(mc |claude )' "$file" || true)))
+    g=$((g + $(grep -cE '^commands = \["grok ' "$file" || true)))
+  done < "$manifest"
+  printf 'claude %d / grok %d' "$c" "$g"
+}
+
 list_snapshots() {
   local found=0
   while IFS= read -r sid; do
     [ -z "$sid" ] && continue
     found=1
     local meta="$SNAPSHOTS_DIR/$sid/meta.txt"
-    local time sessions tabs
+    local time sessions tabs agents
     time=$(sed -n '1p' "$meta" 2>/dev/null)
     sessions=$(sed -n '2p' "$meta" 2>/dev/null)
     tabs=$(sed -n '3p' "$meta" 2>/dev/null)
-    printf '%s\t%s\t%s 个会话\t%s 个 tab\n' "$sid" "${time:-未知时间}" "${sessions:-?}" "${tabs:-?}"
+    agents=$(snapshot_agents "$sid")
+    printf '%s\t%s\t%s 个会话\t%s 个 tab\t%s\n' \
+      "$sid" "${time:-未知时间}" "${sessions:-?}" "${tabs:-?}" "${agents:-未知}"
   done < <(snapshot_ids)
   if [ "$found" -eq 0 ]; then
     echo "没有任何存档，请先在重启前运行 agent-session-snapshot.py" >&2
@@ -136,8 +154,12 @@ case "${1:-}" in
   --list | -l | list)
     list_snapshots
     ;;
+  --agents)
+    snapshot_agents "${2:?用法: $0 --agents <snapshot-id>}"
+    echo
+    ;;
   "")
-    echo "用法: $0 --list | <snapshot-id> | latest，可选第二个参数指定 claude 的启动命令：mc（默认）/ claude" >&2
+    echo "用法: $0 --list | --agents <snapshot-id> | <snapshot-id> | latest，可选第二个参数指定 claude 的启动命令：mc（默认）/ claude" >&2
     exit 2
     ;;
   *)

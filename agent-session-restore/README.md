@@ -26,9 +26,9 @@ Warp 自己会把窗口、tab、分屏结构原样摆回来，但每个格子里
 # 存档
 ~/.claude/skills/agent-session-restore/agent-session-snapshot.py
 
-# 恢复：先列出所有存档
+# 恢复：先列出所有存档（每行末尾是这份存档里 claude / grok 各多少个格子）
 bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh --list
-# 再恢复指定的一份（latest 表示最新一份）
+# 再恢复指定的一份（latest 表示最新一份；第二个参数 mc|claude 只对 claude 的格子生效）
 bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-id>
 ```
 
@@ -37,11 +37,11 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-
 </p>
 
 1. **会话精确定位**：每个 Warp pane 里运行的 claude 进程，环境变量都带 `WARP_TERMINAL_SESSION_UUID`，跟 Warp 状态库（`~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite`）里 `terminal_panes.uuid` 字段是完全相同的值——靠这个做精确匹配，不是靠猜 cwd 或顺序。读取另一个进程的环境变量用的是 `psutil`。
-2. **两个 agent 的会话索引不同**：claude 走 `~/.claude/sessions/<pid>.json`（一个进程一个文件）；grok 走 `~/.grok/active_sessions.json`（一张存活登记表）。grok 进程自身的环境变量里**没有** `GROK_SESSION_ID`（只注入给子进程），所以 `pid → session_id` 只能靠这张表。grok 的会话还按 cwd 落盘在 `~/.grok/sessions/<URL 编码的 cwd>/<session-id>/`，恢复前脚本会校验目录还在不在，不在就把该格子的 `commands` 去掉、降级成普通 shell（不会开出一个一启动就报 `session not found` 的 pane）。
+2. **两个 agent 的会话索引不同**：claude 走 `~/.claude/sessions/<pid>.json`（一个进程一个文件）；grok 走 `~/.grok/active_sessions.json`（一张存活登记表）。grok 进程自身的环境变量里**没有** `GROK_SESSION_ID`（只注入给子进程），所以 `pid → session_id` 得靠这张表、或者靠进程命令行里的 `--resume <session_id>`。**两条路缺一不可**：这张登记表会漏登活着的会话（实测 12 个在跑的 grok 进程只登记了 8 个），只按登记表存档会让漏掉的那些直接消失；反过来它也可能留着早已退出、pid 又被回收的陈旧条目，照读会凭空造出一个"活会话"并塞进某个格子（脚本用"进程启动时间比登记时间晚 5 分钟以上"识别这种情况并跳过）。grok 的会话还按 cwd 落盘在 `~/.grok/sessions/<URL 编码的 cwd>/<session-id>/`，恢复前脚本会校验目录还在不在，不在就把该格子的 `commands` 去掉、降级成普通 shell（不会开出一个一启动就报 `session not found` 的 pane）。
 3. **真实分屏树还原**：同一个 sqlite 库的 `windows` / `tabs` / `pane_nodes` / `pane_branches` / `terminal_panes` 表记录了完整的窗口/tab/分屏结构，据此还原出跟原来一模一样的分屏布局（横切/竖切、任意嵌套层级）。
 4. **恢复机制**：生成 Warp 的 Tab Config（`~/.warp/tab_configs/*.toml`），用 `open "warp://tab_config/<name>"` 非交互触发打开。<br>**踩过的坑**：分屏根节点的判定规则是「文件里第一个 `[[panes]]` 条目」（源码 `warpdotdev/warp` 的 `resolve_pane_tree`），不是看 id 叫什么——写错顺序会静默退化成只开第一个 pane，不报错。
 5. **只认 Warp 里的会话**：没有 `WARP_TERMINAL_SESSION_UUID` 的进程（跑在 IntelliJ 终端、iTerm、远程桌面工具里的会话）会被自动跳过，不会被错误地当成 Warp 会话处理。
-6. **一个格子里的多个会话**：`mc --code` 启动时 `mc` + `claude` 是两个进程但只有一个会话（登记表里只记 claude 本体，天然不重复计数）；若是**真正独立**的两个会话（Ctrl-Z 挂了旧的又开了新的、或在 grok 里嵌套起了 claude），一个格子只有一个终端画面、塞不下两个——排序后（没被挂起的优先，其次启动更晚的）第一个回原格子，其余各自另开一个 tab，会话都不丢。
+6. **一个格子里的多个会话**：`mc --code` 启动时 `mc` + `claude` 是两个进程但只有一个会话（登记表里只记 claude 本体，天然不重复计数）。另外两类也**不算**独立会话、不会被恢复成额外 tab：登记表把同一个 pid 记在多个 session_id 上（一个进程只有一个终端画面），以及在同一格子里被别的会话嵌套起来的（fork 跑挂了、agent 用 shell 工具又拉起一个——判定依据是它的进程祖先链里坐着同格子里另一个会话的进程）。只有**真正独立**的多个会话（Ctrl-Z 挂了旧的又开了新的，pid 和祖先链都对不上）才会一个回原格子、其余各自另开一个 tab，会话都不丢。
 
 <p align="center">
   <img src="./assets/readme/section-story.svg" width="100%" alt="用户故事：为什么需要它">
@@ -62,7 +62,8 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-
 - **不保证 100% 分毫不差**：Warp 自己的状态库写入有轻微延迟，极少数刚创建的 pane 可能还没同步进去——这种会话会退化成单独恢复一个不分屏的 tab（不会丢失，只是布局退化）。
 - **只管 Warp 窗口里的会话**：跑在其他终端里的 agent 不在这套工具的管理范围内。
 - **pane 尺寸恢复不了、只能均分**：Warp 的 tab-config 格式没有尺寸字段（源码里 `TabConfigPaneNode` 带 `deny_unknown_fields`，硬塞会解析失败），属 Warp 硬限制。切分方向、层级、数量、内容都能精确还原，唯独尺寸比例会被重置成等分。
-- **启动命令在恢复时二选一（只作用于 claude 的格子）**：`agent-restore-sessions.sh <snapshot-id|latest> [mc|claude]`，第二个参数默认 `mc`（用 `mc --code --dangerously-skip-permissions --resume {session_id}` 拉起），传 `claude` 则改用裸 `claude --dangerously-skip-permissions --resume {session_id}`。恢复前脚本会把 claude 的命令前缀改写成对应启动方式，session_id 不变，同一份存档可以随意切换。grok 的格子始终用 `grok --always-approve --resume {session_id}`，不受这个参数影响。
+- **启动命令在恢复时二选一（只作用于 claude 的格子）**：`agent-restore-sessions.sh <snapshot-id|latest> [mc|claude]`，第二个参数默认 `mc`（用 `mc --code --dangerously-skip-permissions --resume {session_id}` 拉起），传 `claude` 则改用裸 `claude --dangerously-skip-permissions --resume {session_id}`。恢复前脚本会把 claude 的命令前缀改写成对应启动方式，session_id 不变，同一份存档可以随意切换。grok 的格子始终用 `grok --always-approve --resume {session_id}`，不受这个参数影响。存档里没有 claude 的格子时这个参数不会被用到（`--list` 末尾那列 `claude X / grok Y` 就是各存档的构成，单查一份用 `--agents <snapshot-id>`）。
+- **同一格里嵌套起的会话、以及登记表把同一个 pid 挂到多个会话上的那些不恢复**：它们本来就不占独立终端格子，恢复出来只会是你从没打开过的窗口（见原理第 6 条）。
 
 ## 依赖
 
@@ -71,7 +72,7 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-
 | macOS + Warp 终端 | 核心机制依赖 Warp 的状态库和 tab_config |
 | Python 3 + `psutil` | `pip3 install --user psutil` |
 | `~/.claude/sessions/*.json` | Claude Code 会话记录（不同版本目录结构可能有差异）|
-| `~/.grok/active_sessions.json` | Grok 的存活会话登记表（`pid → session_id` 的唯一来源）|
+| `~/.grok/active_sessions.json` | Grok 的存活会话登记表（`pid → session_id` 的来源之一，会漏登，故另有进程命令行兜底）|
 | `~/.grok/sessions/` | Grok 会话落盘目录，按 URL 编码的 cwd 分目录 |
 
 <p align="center">

@@ -9,7 +9,8 @@
   - Claude Code：~/.claude/sessions/<pid>.json，一个进程一个文件，内含 sessionId/cwd/startedAt。
   - Grok：~/.grok/active_sessions.json，一张存活登记表（session_id/pid/cwd/opened_at）。
     grok 进程自身的环境变量里没有 GROK_SESSION_ID（它只注入给子进程），所以 pid → session_id
-    只能靠这张表。
+    得靠这张表，或者靠进程命令行里的 `--resume <session_id>`（这张表会漏登活着的会话，
+    所以进程表那一路是必备的兜底，见 collect_grok_process_sessions）。
 """
 import json
 import os
@@ -48,6 +49,10 @@ RESUME_CMD = {
     "claude": "mc --code --dangerously-skip-permissions --resume {session_id}",
     "grok": "grok --always-approve --resume {session_id}",
 }
+# 登记时间与进程启动时间允许的偏差上限（秒）：超过它说明登记表里的 pid 已被回收。
+PID_REUSE_SLACK = 300
+# grok 进程命令行里的 `--resume <session_id>`：session id 直接可见，不必经过登记表。
+GROK_RESUME_RE = re.compile(r"--resume\s+([0-9a-fA-F-]{36})")
 
 
 def sh(*args):
@@ -88,9 +93,27 @@ def toml_escape(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def pid_recycled(pid, started):
+    """判断登记表里那个 pid 是不是已经被系统回收给了别的进程（该会话其实早退出了）。
+
+    真会话进程的启动时间不会晚于它自己的登记时间——grok 的 opened_at 实测比进程启动晚
+    8~19 秒（启动初始化）；claude 的 <pid>.json 是进程一起来就写（二进制里那行
+    `startedAt: Date.now()`，同一条记录里还带 `procStart`），所以"进程比登记时间晚 5 分钟
+    以上才启动"只可能是 pid 复用。不排掉的话，pid 落到哪个格子，这个早死掉的会话就会被算成
+    那个格子里一个活着的会话。started 缺失（0）时无从判断，放行。"""
+    if not started:
+        return False
+    try:
+        return psutil.Process(pid).create_time() > started + PID_REUSE_SLACK
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
 def pane_session(agent, pid, session_id, cwd, started):
     """把一条原始记录归一成统一形态；只保留"进程存活 + 挂真实 tty + 归属 Warp"的会话。"""
     if not is_alive(pid):
+        return None
+    if not session_id or not cwd:
         return None
     tty = get_tty(pid)
     if not tty or tty == "??":
@@ -99,7 +122,12 @@ def pane_session(agent, pid, session_id, cwd, started):
     if not pane_uuid:
         print(f"  跳过 pid={pid}（{agent}）：不是 Warp 里的会话（可能在 IntelliJ/iTerm/远程终端等其他地方）", file=sys.stderr)
         return None
-    if not session_id or not cwd:
+    if pid_recycled(pid, started):
+        print(
+            f"  跳过 {agent}/{session_id[:8]}（pid={pid}）：登记表里的 pid 已被回收"
+            "（该进程启动时间晚于会话登记时间），这不是那个会话的进程",
+            file=sys.stderr,
+        )
         return None
     return {
         "agent": agent,
@@ -162,9 +190,47 @@ def collect_grok_sessions():
     return sessions
 
 
+def collect_grok_process_sessions():
+    """从进程表补 grok 会话：`grok --always-approve --resume <session_id>` 的 session id 就写在
+    命令行里，cwd 和 pane uuid 也能直接从进程取，用不着登记表。
+
+    为什么必须补：登记表会漏。2026-09-17 实测，12 个活着的 grok 进程只登记了 8 个（漏掉的
+    包括 `01a0a94d`、`01a0aa2f-b2d0`），只按登记表存档会让这些会话直接消失。
+
+    带 `--fork-session` 的进程跳过：它的命令行写的是被 fork 的**父**会话 id，而它自己是一个
+    新会话——按命令行记会把父会话安到 fork 的格子上，比漏掉更糟。这类会话仍由登记表覆盖。"""
+    sessions = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            cl = " ".join(proc.info["cmdline"] or [])
+            name = proc.info["name"] or ""
+            if "grok" not in name and "/grok" not in cl:
+                continue
+            if "--fork-session" in cl:
+                continue
+            m = GROK_RESUME_RE.search(cl)
+            if not m:
+                continue
+            pid = proc.info["pid"]
+            s = pane_session("grok", pid, m.group(1), proc.cwd(), proc.create_time())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if s:
+            sessions.append(s)
+    return sessions
+
+
 def collect_live_sessions():
-    """收集所有存活的 agent 会话（claude + grok 混合）。"""
-    return collect_claude_sessions() + collect_grok_sessions()
+    """收集所有存活的 agent 会话（claude + grok 混合）。
+
+    grok 有登记表和进程表两路来源，按 (agent, session_id, pane_uuid) 去重、进程表那条覆盖
+    登记表那条——它的 pid 按定义就是活着的进程。去重键里带上 pane_uuid 是故意的：同一个会话
+    出现在两个格子里（用户有意 --resume 两次）是两件事，各归各的格子，不能合并掉；要合并的
+    只是"同一个会话在同一个格子里被两路各报了一次"。"""
+    merged = {}
+    for s in collect_claude_sessions() + collect_grok_sessions() + collect_grok_process_sessions():
+        merged[(s["agent"], s["session_id"], s["pane_uuid"])] = s
+    return list(merged.values())
 
 
 def load_warp_pane_tree():
@@ -212,13 +278,58 @@ def rank_sessions(sessions):
     return sorted(sessions, key=lambda s: (s["stopped"], -s["started"]))
 
 
+def ancestors(pid, limit=12):
+    """从 pid 往上收集祖先进程号，用来判断一个会话是不是在别的会话进程里嵌套起的。"""
+    chain = []
+    try:
+        proc = psutil.Process(pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return chain
+    for _ in range(limit):
+        try:
+            proc = proc.parent()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return chain
+        if proc is None:
+            return chain
+        chain.append(proc.pid)
+    return chain
+
+
+def split_nested(group):
+    """把一个格子里的多个会话拆成「独立会话」和「嵌套会话」（后者附带原因）。
+
+    两类不算独立格子：
+    1. 嵌套启动——它的进程祖先链里坐着同格子里另一个会话的进程：它是被那个会话在同一格子
+       里拉起来的（agent 的 shell 工具、或在同一个格子里跑挂的 fork），本身不占独立格子。
+       2026-09-16 20:34 的日志实测过：登记的 pid 67069 同时挂着 01a0a962 和 01a0aa2c 两个
+       session_id，这种格子在存档里就会凭空多出两个 tab。
+    2. 同一个 pid——一个进程只有一个终端画面，登记表却能把一个 pid 记在多个 session_id 下。
+
+    对照组：先 Ctrl-Z 挂起 A、再在同一个格子里开 B，B 的 pid 与祖先链里都没有 A，仍算独立。"""
+    pids = {s["pid"] for s in group}
+    independent, nested = [], []
+    seen_pid = set()
+    for s in group:
+        if s["pid"] in seen_pid:
+            nested.append((s, "登记表把同一个 pid 记在了多个会话上，一个进程只有一个终端画面"))
+        elif set(ancestors(s["pid"])) & (pids - {s["pid"]}):
+            nested.append((s, "它是在同一个格子里由别的会话嵌套起的"))
+        else:
+            seen_pid.add(s["pid"])
+            independent.append(s)
+    return independent, nested
+
+
 def match_sessions_to_tree(tabs, live_sessions):
     """按 WARP_TERMINAL_SESSION_UUID 精确匹配到树里的叶子——不是猜的，是精确对应。
     DB 还没同步到的（刚开的新 pane）匹配不上，留作 leftover 单独处理。
 
-    一个格子里有多个"真正独立"的会话时（先 Ctrl-Z 挂了 A 又开了 B、或在 grok 里嵌套起了 claude），
-    一个格子只有一个终端画面、塞不下两个：排序后第一个回原格子，其余作为 extra 另开 tab，
-    会话内容都不丢。注意 `mc --code` 的 mc+claude 是两个进程但只有一个会话，不在此列。"""
+    一个格子里有多个"真正独立"的会话时（先 Ctrl-Z 挂了 A 又开了 B），一个格子只有一个终端
+    画面、塞不下两个：排序后第一个回原格子，其余作为 extra 另开 tab，会话内容都不丢。注意
+    `mc --code` 的 mc+claude 是两个进程但只有一个会话，不在此列。
+    另外两类不算"独立会话"：同一格子里嵌套起的、登记表里 pid 已被回收的（见 pid_recycled）——
+    前者在匹配前就排掉，后者在收集阶段就已经排掉。"""
     by_uuid = defaultdict(list)
     for s in live_sessions:
         by_uuid[s["pane_uuid"]].append(s)
@@ -231,6 +342,13 @@ def match_sessions_to_tree(tabs, live_sessions):
             if not (n["is_leaf"] and n["cwd"]):
                 continue
             group = rank_sessions(by_uuid.get(n["pane_uuid"], []))
+            if len(group) > 1:
+                group, nested = split_nested(group)
+                for s, why in nested:
+                    print(
+                        f"  跳过 {s['agent']}/{s['session_id'][:8]}：{why}（不是独立终端格子），不单独开 tab",
+                        file=sys.stderr,
+                    )
             assignment[(tab_id, node_id)] = group[0] if group else None
             if group:
                 matched_uuids.add(n["pane_uuid"])

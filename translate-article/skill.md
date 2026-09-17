@@ -9,9 +9,9 @@
 | 属性 | 值 |
 |-----|---|
 | **name** | translate-article |
-| **version** | 1.2.0 |
+| **version** | 1.3.0 |
 | **author** | huangzele |
-| **description** | 翻译外文文章到中文，自动添加摘要，保存到 Obsidian 并同步到学城文档。用户粘贴文章内容即可完成翻译+摘要+归档+同步。 |
+| **description** | 翻译外文文章到中文，自动添加摘要，保存到 Obsidian 并同步到学城文档。用户粘贴文章内容即可完成翻译+摘要+归档+同步。图注统一按论文式排版。 |
 | **triggers** | `翻译文章`, `translate article`, `翻译到obsidian`, `翻译这篇文章` |
 
 ---
@@ -85,10 +85,12 @@
 13. **格式保留**：保持原文的标题层级、列表、代码块等 Markdown 格式
 14. **代码不翻译**：代码块和行内代码保持原样
 15. **图片链接先原样保留**：翻译阶段先保持原文图片链接（外部 URL）不变，作为占位，实际本地化在 Step 6 统一处理——不要在这一步就下载或替换
+16. **英文栏目标签要译成中文**：原文里的 `TLDR` / `TL;DR` / `TL;DW` 这类网络缩略标签要译成中文，**不要原样保留英文缩写**，也不要翻成中文网络俚语（「太长不看」这类口语梗不适合技术文章）。用中性书面说法，`TLDR` → 「一句话总结」。同理 `Key takeaways` → 「核心要点」、`Abstract` → 「摘要」也一并译成中文
+17. **图注要翻译，并规范成「图 N：描述」**：原文的图片说明文字属于正文的一部分，必须译成中文；原文常把 alt 文字另起一行又重复输出一遍当图注，这种重复要合并成一条，不要保留两行。统一格式见 Step 6
 
 #### 译后自检
 
-16. 翻译完成后，**以"完全没看过原文的中文读者"视角通读一遍译文**：凡是读不顺、需要回读、或要去猜"原文是哪个词"的句子，重译
+18. 翻译完成后，**以"完全没看过原文的中文读者"视角通读一遍译文**：凡是读不顺、需要回读、或要去猜"原文是哪个词"的句子，重译
 
 ### Step 3：生成摘要
 
@@ -137,7 +139,7 @@ original_language: "原文语言（如 English）"
 
 示例：`20260526-Anthropic工作坊-我们如何使用Claude-Code.md`
 
-### Step 6：下载并本地化图片（Obsidian 与学城共用）
+### Step 6：下载并本地化图片 + 格式化图注（Obsidian 与学城共用）
 
 **背景**：原文图片大多来自境外图床（如 Twitter/X 的 `pbs.twimg.com`），当前网络下常常无法直连。如果 Obsidian 正文里保留这种外部直链，图片会直接显示不出来。因此必须在保存到 Obsidian **之前**，把所有图片下载到本地并改为相对路径引用；这批本地文件后续同步学城时可以直接复用，不用再下载一次。
 
@@ -157,15 +159,51 @@ original_language: "原文语言（如 English）"
    ```
    **关键注意**：代理必须用 `socks5h://`（远端 DNS 解析），不能用 `socks5://`（本地 DNS 解析会被污染，导致 SSL 握手失败）。
 
-5. **两种方式都下载失败时**：该图片保留原始外部 URL 不做替换，记录下来，在 Step 9 的最终输出中告知用户"该图片本地化失败，Obsidian 中可能无法显示"。
+5. **校验下载结果，失败就退到 Wayback 存档**：
 
-6. **替换正文引用**：下载成功的图片，把正文中的 `![alt](原始外部URL)` 替换为相对路径 `![alt](assets/文件名)`。
+   - 下载完必须 `file "<本地路径>"` 验一下类型。返回 `HTML document` 说明拿到的不是图片，而是反爬挑战页（如 Vercel Security Checkpoint）——这种情况直连和代理都挡不住，别反复重试同样的两条路。
+   - 原文站全站上了反爬时，图片仍可从存档取到原图：
 
-7. **产出**：本地图片文件（已复制进 assets 目录）+ 图片引用已全部替换为本地相对路径的正文 + 一份「本地文件路径 → 原始外部URL」映射表（供 Step 8 同步学城时复用，避免重复下载）。
+     ```bash
+     curl -sSL --connect-timeout 15 -o "<本地路径>" \
+       "https://web.archive.org/web/2026id_/<原始图片URL>"
+     ```
+
+     `id_` 后缀表示要原始文件本身；去掉 `id_` 会拿到 Wayback 自己包的一层页面。同样用 `file` 验证后再采信。
+   - 连存档也取不到时：该图片保留原始外部 URL 不做替换，记录下来，在 Step 9 的最终输出中告知用户"该图片本地化失败，Obsidian 中可能无法显示"。
+
+6. **替换正文引用**：下载成功的图片，把正文中的 `![alt](原始外部URL)` 替换为 Step 6.7 规定的 figure 块（相对路径 `assets/文件名`）。
+
+7. **正文里图片一律写成 figure 块 + figcaption（论文式图注）**：
+
+   图片和图注**都不能写成普通 Markdown 图片行 + 普通段落**——那样图注会和正文长得一模一样，读者分不清哪句是正文、哪句是图的说明。统一写成 HTML `figure` 块，**且必须压在一行里**：
+
+   ```markdown
+   <figure><img src="assets/xxx.webp" alt="中文描述"><figcaption>图 1：中文描述</figcaption></figure>
+   ```
+
+   - **为什么必须单行**：多行写法的 `figure` 在 Obsidian 阅读视图里正常，但在实时预览（Live Preview）里会被当成一整块 HTML 嵌入，外面套一个浅灰边框，右上角还挂一个 `</>` 编辑按钮。单行写法两种视图都干净。
+   - `N` 从 1 开始，按图片在文中出现的顺序编号
+   - `alt` 和 `figcaption` 都写中文；`figcaption` 必须带 `图 N：` 前缀
+   - 原文若把 alt 文字另起一行重复当图注，合并成一条规范图注，**不要留两行重复文字**
+   - 这一行前后都要留空行，否则会和相邻段落粘连
+
+8. **确保 Obsidian 装了图注样式（首次使用本 skill 时执行一次）**：Obsidian 自带主题对 `figcaption` 没有任何样式，不装 CSS 片段的话图注看起来仍是普通正文。检查 `{obsidianRepo}/.obsidian/snippets/figure-caption.css` 是否存在，不存在就创建，并把 `figure-caption` 加进 `{obsidianRepo}/.obsidian/appearance.json` 的 `enabledCssSnippets` 数组（该字段不存在就新建）：
+
+   ```css
+   /* 论文式图注：图片居中，图注小字号、弱化颜色，与正文明显区分 */
+   figure { margin: 1.8em 0; text-align: center; }
+   figure > img { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+   figcaption { margin-top: 0.65em; font-size: 0.85em; line-height: 1.6; color: var(--text-muted); }
+   ```
+
+9. **产出**：本地图片文件（已复制进 assets 目录）+ 图片引用已全部替换为本地相对路径、图注已格式化的正文 + 一份「本地文件路径 → 原始外部URL」映射表（供 Step 8 同步学城时复用，避免重复下载）。
+
+> 学城侧的图注不能复用这套 figure 写法（学城会把 `figure/figcaption` 降级成裸 `<img>`），需要用学城自己的居中和字号标记，见 Step 8.4。两边图注编号必须一致。
 
 ### Step 7：保存文件到 Obsidian
 
-将 Step 6 产出的本地图片文件保存到 `{obsidianRepo}/{分类路径}/assets/` 目录，再将图片引用已本地化的完整正文写入 `{obsidianRepo}/{分类路径}/{日期}-{标题}.md`。
+将 Step 6 产出的本地图片文件保存到 `{obsidianRepo}/{分类路径}/assets/` 目录，再将图片引用已本地化、图注已格式化的完整正文写入 `{obsidianRepo}/{分类路径}/{日期}-{标题}.md`。
 
 ### Step 8：同步到学城文档（含图片）
 
@@ -177,14 +215,14 @@ original_language: "原文语言（如 English）"
 
 #### 8.2 创建文档（不含图片）
 
-先将 Markdown 内容中的图片行（`![...](...)` 格式）去掉，用纯文本内容创建文档：
+先把 Markdown 里的整个 figure 块（`<figure>` 到 `</figure>`）去掉，用剩下的纯文本创建文档：
 
 ```bash
-# 去掉图片行后创建
-CONTENT=$(sed '/^!\[/d' <<< "$MARKDOWN_CONTENT")
+# 去掉 figure 块（含其中的 <img> 和 <figcaption>）后创建
+sed '/^<figure>$/,/^<\/figure>$/d' /tmp/article.md > /tmp/article_noimg.md
 oa-skills citadel createDocument \
   --title "YYYYMMDD-翻译后的中文标题" \
-  --content "$CONTENT" \
+  --file /tmp/article_noimg.md \
   --parentId "<对应目录的 contentId>" \
   --spaceId "4344448" \
   --mis huangzele
@@ -216,24 +254,38 @@ oa-skills citadel uploadImageToDocument \
 
 记录每张图片的映射关系：`本地文件/原始外部URL → 学城CDN URL`。
 
-#### 8.4 将图片插入文档
+#### 8.4 将图片和图注插入文档（走 CitadelXML，不要走 CitadelMD）
 
-1. 获取文档的 CitadelMD 结构：
+**为什么必须是 XML**：学城不支持 `figure/figcaption`（会被降级成裸 `<img>`，说明文字只能放 `<p>`）；而图注要和正文区分开，需要「居中 + 小字号 + 弱化颜色」这三个样式，只有 CitadelXML 能表达。CitadelMD 拿不到这些标记，所以这一步不要用 `updateDocumentByMd`。
+
+1. 获取文档 XML 和版本号（`stepVersion` 要透传给下一步）：
    ```bash
-   oa-skills citadel getDocumentCitadelMd --contentId "<文档ID>" --output /tmp/article.md --mis huangzele
+   oa-skills citadel getDocumentXml --contentId "<文档ID>" --output /tmp/article.xml --mis huangzele
    ```
 
-2. 找到图片应插入的位置（根据上下文段落定位），插入 CitadelMD 格式的图片节点：
-   ```
-   :::paragraph{nodeId="auto-img-N"}
-   ![描述](学城CDN URL){width=W height=H}
-   :::
+2. 在图片应出现的位置插入**两段**——图片段和图注段：
+
+   ```xml
+   <p nodeId="auto-img-N" align="center"><img src="<学城CDN URL>" name="<图片描述>" width="W" height="H" /></p>
+   <p align="center"><span font-size="13"><span color="#8a8a8a"><strong>图 N</strong>：中文描述</span></span></p>
    ```
 
-3. 更新文档：
+   - `align="center"`：图片和图注都居中
+   - `font-size="13"` + `color="#8a8a8a"`：小字号、弱化颜色，这是和正文拉开差距的关键
+   - span 必须**外字号内颜色**（`<span font-size>` 套 `<span color>`），顺序反了不会被解析
+   - `图 N` 用 `<strong>` 加粗，编号与 Obsidian 侧的 `figcaption` 保持一致
+   - 位置按图片前后的上下文段落定位（找到该段落的 `nodeId`，插到它前面或后面）
+
+3. 回传（带并发保护）：
    ```bash
-   oa-skills citadel updateDocumentByMd --contentId "<文档ID>" --file /tmp/article.md --mis huangzele
+   oa-skills citadel updateDocumentByXml \
+     --contentId "<文档ID>" \
+     --file /tmp/article.xml \
+     --step-version <stepVersion> \
+     --mis huangzele
    ```
+
+4. 回读校验：再次 `getDocumentXml`，确认 `align="center"` 和两层 `span` 都还在。若发现被拆成多个 span 是正常的，只要样式属性保留即可。
 
 #### 8.5 如果目录不匹配
 
@@ -243,7 +295,8 @@ oa-skills citadel uploadImageToDocument \
 
 - **无图片的文章**：跳过 8.3 和 8.4，直接完成
 - **图片上传失败**：记录失败的图片 URL，在最终输出中告知用户，不影响文档创建
-- **图片位置定位**：根据原文中图片前后的文本段落内容，在 CitadelMD 中找到对应的 `paragraph` nodeId，在其后插入图片节点
+- **图片位置定位**：根据原文中图片前后的文本段落内容，在 CitadelXML 里找到对应的 `<p>` nodeId，在它附近插入图片段落和图注段落
+- **图片节点被识别成功**：回读 XML 时 `<img>` 上会多出一个自动分配的 `nodeId`，说明学城把它当成了真图片节点而不是纯文本
 
 **注意事项**：
 - 学城文档标题格式为 `YYYYMMDD-标题`（与 Obsidian 文件名一致，但不含 `.md` 后缀）
@@ -287,6 +340,8 @@ oa-skills citadel uploadImageToDocument \
 - 翻译风格偏向技术博客的自然中文表达，避免机翻味
 - 如果文章有明确的原文标题，使用翻译后的标题作为文件名
 - 如果无法确定标题，从内容中提炼一个合适的标题
+- **图注必须和正文长得不一样**：Obsidian 用 `figure` + `figcaption` + `figure-caption` CSS 片段，学城用 `align="center"` + `font-size="13"` + `color="#8a8a8a"` 的独立段落。两边都不能把图注写成普通段落，见 Step 6.7 和 Step 8.4
+- **TLDR 等英文标签译成中文**：`TLDR` 译作「一句话总结」（中性书面说法，不要用「太长不看」这类口语梗），不要原样保留英文缩写
 - **图片必须本地化**：Obsidian 正文中禁止保留外部图床直链（尤其是 Twitter/X 等境外图床，当前网络下常无法直连，会导致图片显示不出来）。图片必须先下载到 `assets/` 目录、正文改为相对路径引用，见 Step 6
 - 图片下载遵循"先直连、失败再走代理"的顺序，代理固定用 `socks5h://127.0.0.1:7892`（必须是 `socks5h` 而不是 `socks5`，否则本地 DNS 解析会被污染导致握手失败）
 - Obsidian 本地化的图片文件，同步学城时应直接复用，不要重复下载

@@ -26,7 +26,7 @@ Warp 自己会把窗口、tab、分屏结构原样摆回来，但每个格子里
 # 存档
 ~/.claude/skills/agent-session-restore/agent-session-snapshot.py
 
-# 恢复：先列出所有存档（每行末尾是这份存档里 claude / grok 各多少个格子）
+# 恢复：先列出所有存档（每行末尾是这份存档自己记下的构成：claude / grok 各多少个格子）
 bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh --list
 # 再恢复指定的一份（latest 表示最新一份；第二个参数 mc|claude 只对 claude 的格子生效）
 bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-id>
@@ -62,7 +62,8 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <snapshot-
 - **不保证 100% 分毫不差**：Warp 自己的状态库写入有轻微延迟，极少数刚创建的 pane 可能还没同步进去——这种会话会退化成单独恢复一个不分屏的 tab（不会丢失，只是布局退化）。
 - **只管 Warp 窗口里的会话**：跑在其他终端里的 agent 不在这套工具的管理范围内。
 - **pane 尺寸恢复不了、只能均分**：Warp 的 tab-config 格式没有尺寸字段（源码里 `TabConfigPaneNode` 带 `deny_unknown_fields`，硬塞会解析失败），属 Warp 硬限制。切分方向、层级、数量、内容都能精确还原，唯独尺寸比例会被重置成等分。
-- **启动命令在恢复时二选一（只作用于 claude 的格子）**：`agent-restore-sessions.sh <snapshot-id|latest> [mc|claude]`，第二个参数默认 `mc`（用 `mc --code --dangerously-skip-permissions --resume {session_id}` 拉起），传 `claude` 则改用裸 `claude --dangerously-skip-permissions --resume {session_id}`。恢复前脚本会把 claude 的命令前缀改写成对应启动方式，session_id 不变，同一份存档可以随意切换。grok 的格子始终用 `grok --always-approve --resume {session_id}`，不受这个参数影响。存档里没有 claude 的格子时这个参数不会被用到（`--list` 末尾那列 `claude X / grok Y` 就是各存档的构成，单查一份用 `--agents <snapshot-id>`）。
+- **启动命令在恢复时二选一（只作用于 claude 的格子）**：`agent-restore-sessions.sh <snapshot-id|latest> [mc|claude]`，第二个参数默认 `mc`（用 `mc --code --dangerously-skip-permissions --resume {session_id}` 拉起），传 `claude` 则改用裸 `claude --dangerously-skip-permissions --resume {session_id}`。恢复前脚本会把 claude 的命令前缀改写成对应启动方式，session_id 不变，同一份存档可以随意切换。grok 的格子始终用 `grok --always-approve --resume {session_id}`，不受这个参数影响。
+- **存档目录是自包含的**：每份存档的构成（`claude X / grok Y`）在存档时写进自己的 `meta.txt` 第 4 行，`--list` 末列和 `--agents <snapshot-id>` 读的都是它，不去翻会被恢复过程改写、删掉的 `~/.warp/tab_configs/*.toml`（否则同一份存档的构成会随外部状态漂移）。早期存档没记这一行，显示 `未知`——不知道有没有 claude 的格子，就照样问一句 claude 的启动命令。
 - **同一格里嵌套起的会话、以及登记表把同一个 pid 挂到多个会话上的那些不恢复**：它们本来就不占独立终端格子，恢复出来只会是你从没打开过的窗口（见原理第 6 条）。
 
 ## 依赖

@@ -19,7 +19,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +51,8 @@ RESUME_CMD = {
 }
 # 登记时间与进程启动时间允许的偏差上限（秒）：超过它说明登记表里的 pid 已被回收。
 PID_REUSE_SLACK = 300
+# 存档构成（meta.txt 第 4 行）里两个 agent 的固定顺序。
+COMPOSITION_AGENTS = ("claude", "grok")
 # grok 进程命令行里的 `--resume <session_id>`：session id 直接可见，不必经过登记表。
 GROK_RESUME_RE = re.compile(r"--resume\s+([0-9a-fA-F-]{36})")
 
@@ -490,6 +492,8 @@ def main():
     manifest_names = []
     counter = 0
     matched_count = 0
+    # 真正写进 tab-config 的会话，用来把这份存档的构成（各 agent 多少个格子）固化在存档里。
+    written = []
 
     for tab_id, tab in sorted(tabs.items()):
         chunks = render_tab_chunks(tab_id, tab, assignment)
@@ -500,13 +504,12 @@ def main():
         write_tab_config(name, chunks)
         manifest_names.append(name)
         leaf_count = sum(1 for c in chunks if any(l.startswith("directory =") for l in c))
-        hit_count = sum(
-            1
-            for (tid, nid), s in assignment.items()
-            if tid == tab_id and s is not None
-        )
-        matched_count += hit_count
-        print(f"  [{name}] 精确还原 {leaf_count} 个 pane 的分屏布局（{hit_count} 个接上了会话）")
+        tab_sessions = [
+            s for (tid, nid), s in assignment.items() if tid == tab_id and s is not None
+        ]
+        written.extend(tab_sessions)
+        matched_count += len(tab_sessions)
+        print(f"  [{name}] 精确还原 {leaf_count} 个 pane 的分屏布局（{len(tab_sessions)} 个接上了会话）")
 
     # 同一个格子里多出来的独立会话：一个格子只有一个终端画面，塞不下两个，各自开一个 tab。
     for s in extras:
@@ -515,6 +518,7 @@ def main():
         write_tab_config(name, [single_pane_config(s)])
         manifest_names.append(name)
         print(f"  [{name}] {s['cwd']}（{s['agent']} session {s['session_id']}，与同格子里的另一个会话并存，单独开一个 tab）")
+        written.append(s)
         matched_count += 1
 
     for s in leftover:
@@ -523,6 +527,7 @@ def main():
         write_tab_config(name, [single_pane_config(s)])
         manifest_names.append(name)
         print(f"  [{name}] {s['cwd']}（{s['agent']} session {s['session_id']}，DB 里没找到对应 pane，单独开一个 tab）")
+        written.append(s)
         matched_count += 1
 
     print("")
@@ -533,11 +538,17 @@ def main():
         return
 
     # 1. 把本次存档的清单和元信息写到独立的 snapshots/<sid>/ 目录
+    #    第 4 行是这份存档的构成（各 agent 占多少个格子），在存档时就固化下来：恢复脚本据此
+    #    判断要不要问 claude 的启动命令，读的是存档自己，不去翻会被恢复过程改写/删掉的
+    #    ~/.warp/tab_configs —— 否则"存档构成"会变成一个随时间漂移的外部状态。
+    agents = Counter(s["agent"] for s in written)
     snap_dir = SNAPSHOTS_DIR / sid
     snap_dir.mkdir(parents=True, exist_ok=True)
     (snap_dir / "manifest.txt").write_text("\n".join(manifest_names) + "\n")
     (snap_dir / "meta.txt").write_text(
         f"{now:%Y-%m-%d %H:%M:%S}\n{matched_count}\n{len(manifest_names)}\n"
+        f"{COMPOSITION_AGENTS[0]} {agents[COMPOSITION_AGENTS[0]]} / "
+        f"{COMPOSITION_AGENTS[1]} {agents[COMPOSITION_AGENTS[1]]}\n"
     )
 
     # 2. 只保留最近 KEEP_SNAPSHOTS 份存档，并清掉不属于有效存档的 tab-config

@@ -1,7 +1,7 @@
 #!/bin/bash
 # 重启后手动运行：从 agent-session-snapshot.py 生成的多份存档里挑一份恢复。
 #   agent-restore-sessions.sh --list                      列出所有存档（最新在前）
-#   agent-restore-sessions.sh --agents <snapshot-id>      只报该存档里 claude / grok 各多少个 pane
+#   agent-restore-sessions.sh --agents <snapshot-id>      只报该存档记录的构成（claude / grok 各多少个格子）
 #   agent-restore-sessions.sh <snapshot-id> [启动命令]    恢复指定存档
 #   agent-restore-sessions.sh latest [启动命令]           恢复最新一份存档
 # 启动命令二选一：mc（默认，用 mc --code 启动）/ claude（用 claude 命令启动）。
@@ -78,19 +78,15 @@ snapshot_ids() {
   done
 }
 
-# 统计一份存档里各 agent 的 pane 数：claude 的 resume 命令只有 mc/claude 两种前缀，
-# grok 的固定是 grok。恢复前拿它判断要不要问「claude 用哪个启动命令」。
+# 一份存档里各 agent 多少个格子：直接读存档自己记的构成（meta.txt 第 4 行，存档时写死的）。
+# 不去翻 ~/.warp/tab_configs/*.toml 现算——那些 toml 会被恢复过程改写启动命令前缀、被删掉
+# 失效的 grok commands，读它们等于把"存档构成"变成一个会随时间漂移的外部状态。早期存档没有
+# 这一行，只能报"未知"（上层按保守处理：未知就照样问 claude 的启动命令）。
 snapshot_agents() {
-  local manifest="$SNAPSHOTS_DIR/$1/manifest.txt" name file c=0 g=0
-  [ -s "$manifest" ] || return 1
-  while IFS= read -r name; do
-    [ -z "$name" ] && continue
-    file="$TAB_CONFIG_DIR/$name.toml"
-    [ -f "$file" ] || continue
-    c=$((c + $(grep -cE '^commands = \["(mc |claude )' "$file" || true)))
-    g=$((g + $(grep -cE '^commands = \["grok ' "$file" || true)))
-  done < "$manifest"
-  printf 'claude %d / grok %d' "$c" "$g"
+  local meta="$SNAPSHOTS_DIR/$1/meta.txt" line
+  [ -s "$meta" ] || return 1
+  line=$(sed -n '4p' "$meta")
+  printf '%s' "${line:-未知}"
 }
 
 list_snapshots() {

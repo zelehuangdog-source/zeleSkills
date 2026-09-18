@@ -14,7 +14,7 @@ visibility: private
 
 解决的问题：Warp 里常年开着十几个 tab、每个 tab 里还分了好几个 pane 跑 Claude Code 和 Grok，电脑重启后所有进程被杀掉，之前只能一个个手动回忆目录、重新 `--resume`。这套工具能把当前所有会话（连同真实的分屏布局）记录下来，重启后一键精确复原。
 
-**每个 pane 各自识别自己跑的是哪个 agent**：claude 的格子用 claude 的存储和启动命令，grok 的格子用 grok 的，两种混在同一个 tab 里也能一起还原。
+**每个 pane 各自识别自己跑的是哪个 agent**：claude 的格子读 claude 的会话存储、恢复时按 `mc --code` 拉起，grok 的格子读 grok 的，两种混在同一个 tab 里也能一起还原。
 
 ## 关键路径
 
@@ -60,25 +60,19 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh --list
 
 输出每行是一份存档：`snapshot-id ⭾ 存档时间 ⭾ N 个会话 ⭾ M 个 tab ⭾ claude X / grok Y`，最新的在最上面。最后一列是**存档时写进 meta.txt 的构成**（每份存档自己记着，与之后的恢复操作无关；早期存档没这一行，显示 `未知`）。单查一份用 `agent-restore-sessions.sh --agents <snapshot-id>`。
 
-**第二步：用 AskUserQuestion 让用户选要恢复哪一份 + （只在需要时）用哪个启动命令**
+**第二步：用 AskUserQuestion 让用户选要恢复哪一份**
 
 把最新的几份（AskUserQuestion 最多 4 个选项）作为候选，label 用「存档时间 + 会话数」，description 补上 snapshot-id。如果存档份数超过 4，告诉用户可以在「Other」里手输某个更早的 snapshot-id。
 
-**⭐ claude 的启动命令只在候选存档里可能有 claude 格子时才问**（看 `--list` 最后一列）：
+**⭐ 只问这一题，不要再问 claude 用哪个启动命令**：claude 的格子固定用 `mc --code --dangerously-skip-permissions --resume <session_id>` 拉起（脚本第二个参数默认 `mc`，不用传）；grok 的格子始终用 `grok --always-approve --resume <session_id>`。候选存档的构成（`--list` 最后一列）只用来给用户交代背景，不再影响问什么。
 
-- 候选存档**全都**明确写着 `claude 0 / grok N` → **这一题整个跳过**，只问选哪一份存档；恢复时第二个参数用默认的 `mc`（存档里没有 claude 格子，这个参数根本不会被用到）。
-- 只要有一份是 `claude ≥ 1`、或者是**早期存档的 `未知`**（没记构成，不能假定它没有 claude）→ 按下面的选项问，和上面那个问题放在**同一个** AskUserQuestion 里：
-
-  - `mc --code 启动`（默认）：claude 的格子用 `mc --code --dangerously-skip-permissions --resume <session_id>` 拉起
-  - `claude 命令启动`：claude 的格子改用 `claude --dangerously-skip-permissions --resume <session_id>`
-
-这个选择**只作用于存档里 claude 的格子**；grok 的格子始终用 `grok --always-approve --resume <session_id>`，不受影响。用户在对话里已经明确说了用哪个启动命令时，可以不再问这一题。
-
-**第三步：用选中的 snapshot-id + 启动命令恢复**
+**第三步：用选中的 snapshot-id 恢复**
 
 ```bash
-bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <用户选中的 snapshot-id> <mc|claude>
+bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <用户选中的 snapshot-id>
 ```
+
+脚本仍保留可选的第二个参数（`mc`/`claude`），只在用户主动要求换 claude 启动方式时才用；日常流程一律走默认值。
 
 （用户如果明确说"就恢复最新的"，可以直接用 `latest` 代替 snapshot-id，跳过一二步。）把恢复过程的输出展示给用户。
 
@@ -98,7 +92,7 @@ bash ~/.claude/skills/agent-session-restore/agent-restore-sessions.sh <用户选
 
    **grok 的会话来源有两路，缺一不可**：登记表 `active_sessions.json` **会漏**——实测 12 个活着的 grok 进程只登记了 8 个，只按登记表存档会让漏掉的那些直接消失。所以另外从进程表补一路：`grok … --resume <session_id>` 的 session id 就在命令行里，cwd 和 pane uuid 也能直接从进程读（`collect_grok_process_sessions()`），两路按 `(agent, session_id, pane_uuid)` 去重、进程表那条覆盖登记表那条。带 `--fork-session` 的进程被排除：它命令行里写的是被 fork 的**父**会话 id，按命令行记等于把父会话安到 fork 的格子上。
 3. **真实分屏树**：同一个 sqlite 库的 `windows`/`tabs`/`pane_nodes`/`pane_branches`/`terminal_panes` 表记录了完整的窗口/tab/分屏结构，据此还原出跟原来一模一样的分屏布局（横切/竖切、嵌套层级）。
-4. **恢复机制**：生成 Warp 的 Tab Config（`~/.warp/tab_configs/*.toml`），用 `open "warp://tab_config/<name>"` 非交互触发。**踩过的坑**：分屏的根节点判定规则是"文件里第一个 `[[panes]]` 条目"（源码 `warpdotdev/warp` 仓库 `app/src/tab_configs/tab_config.rs` 的 `resolve_pane_tree`），不是看 id 叫什么——写错顺序会静默退化成只开第一个 pane，不报错。存档目录是**自包含**的：恢复脚本判断"要不要问 claude 的启动命令"读的是 `meta.txt` 第 4 行，不去翻会被恢复过程改写（启动命令前缀）、被删（失效的 grok 会话）的 `~/.warp/tab_configs/*.toml`——否则同一份存档的构成会随外部状态漂移。
+4. **恢复机制**：生成 Warp 的 Tab Config（`~/.warp/tab_configs/*.toml`），用 `open "warp://tab_config/<name>"` 非交互触发。**踩过的坑**：分屏的根节点判定规则是"文件里第一个 `[[panes]]` 条目"（源码 `warpdotdev/warp` 仓库 `app/src/tab_configs/tab_config.rs` 的 `resolve_pane_tree`），不是看 id 叫什么——写错顺序会静默退化成只开第一个 pane，不报错。存档目录是**自包含**的：`--list` 末列和 `--agents <snapshot-id>` 报的存档构成读的是 `meta.txt` 第 4 行（存档时写死），不去翻会被恢复过程改写（启动命令前缀）、被删（失效的 grok 会话）的 `~/.warp/tab_configs/*.toml`——否则同一份存档的构成会随外部状态漂移。
 5. **只认 Warp 里的会话**：没有 `WARP_TERMINAL_SESSION_UUID` 环境变量的（比如跑在 IntelliJ 终端、iTerm、远程桌面工具里的会话）会被跳过，不会被错误地当成 Warp 会话处理。
 6. **一个格子里有多个会话**：分四种，处理方式不同（判定集中在 `split_nested()`）。
    - **同一个会话的多层壳**（`mc --code` 启动时 `mc` + `claude` 是两个进程、共享同一个 pane uuid）：登记表里只记 claude 本体，天然只算一个会话，不会重复计数。
